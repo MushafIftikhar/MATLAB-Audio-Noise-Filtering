@@ -1,0 +1,112 @@
+%% Load Audio Files
+[sine_wave, Fs1] = audioread('240sinwave.wav');   
+[voice, Fs2] = audioread('voice.mp3');            
+
+% Ensure the same sampling rate
+if Fs1 ~= Fs2
+    
+    voice = resample(voice, Fs1, Fs2);
+    Fs2 = Fs1; 
+end
+
+% Handle Stereo to Mono conversion if needed
+if size(voice, 2) > 1
+    voice = mean(voice, 2); 
+end
+if size(sine_wave, 2) > 1
+    sine_wave = mean(sine_wave, 2); 
+end
+
+% Truncate signals to same length
+minLength = min(length(sine_wave), length(voice));
+sine_wave = sine_wave(1:minLength);
+voice = voice(1:minLength);
+t = (0:minLength-1)/Fs1;
+
+%% Step 1: Mix the Signals
+mixed = sine_wave + voice;
+audiowrite('mixed_audio.wav', mixed, Fs1); % Save for reference
+
+% Plot time-domain signals
+figure;
+subplot(3,1,1); plot(t, sine_wave); title('Original Sine Wave (Interference)'); xlabel('Time (s)'); ylabel('Amp'); grid on;
+subplot(3,1,2); plot(t, voice); title('Original Voice'); xlabel('Time (s)'); ylabel('Amp'); grid on;
+subplot(3,1,3); plot(t, mixed); title('Mixed Signal (Voice + Beep)'); xlabel('Time (s)'); ylabel('Amp'); grid on;
+
+%% Step 2: Frequency Domain Analysis
+N = length(mixed);
+f = (0:N-1)*(Fs1/N);  % Frequency axis
+
+% Compute FFTs
+Xsine = fft(sine_wave);
+Xvoice = fft(voice);
+Xmixed = fft(mixed);
+
+% Plot frequency spectra
+figure;
+subplot(3,1,1); plot(f, abs(Xsine)); title('Spectrum of Sine Wave'); xlabel('Hz'); xlim([0 2000]); grid on;
+subplot(3,1,2); plot(f, abs(Xvoice)); title('Spectrum of Voice'); xlabel('Hz'); xlim([0 2000]); grid on;
+subplot(3,1,3); plot(f, abs(Xmixed)); title('Spectrum of Mixed Signal'); xlabel('Hz'); xlim([0 2000]); grid on;
+
+%% Step 3: Filter Design (Notch Filter Strategy)
+target_freq = 240;      % The frequency of the sine wave spike
+Q_factor = 35;          % Quality factor (controls bandwidth)
+wo = target_freq / (Fs1/2);  
+bw = wo / Q_factor;
+
+% 1. Design IIR Notch Filter (Rejects 240Hz, Passes everything else)
+[b_notch, a_notch] = iirnotch(wo, bw);
+
+% 2. Design IIR Peak Filter (Passes ONLY 240Hz)
+[b_peak, a_peak] = iirpeak(wo, bw);
+
+% Apply filters
+voice_recovered = filtfilt(b_notch, a_notch, mixed);     % Get Voice
+sine_recovered = filtfilt(b_peak, a_peak, mixed);        % Get Sine Wave
+
+% Normalize and save
+voice_recovered = voice_recovered / max(abs(voice_recovered));
+sine_recovered = sine_recovered / max(abs(sine_recovered));
+audiowrite('recovered_voice.wav', voice_recovered, Fs1);
+audiowrite('recovered_sine.wav', sine_recovered, Fs1);
+
+%% Step 4: Plot Recovered Signals
+figure;
+subplot(2,1,1); plot(t, voice_recovered); title('Recovered Voice (Notch Filter)'); xlabel('Time (s)'); grid on;
+subplot(2,1,2); plot(t, sine_recovered); title('Recovered Sine Wave (Peak Filter)'); xlabel('Time (s)'); grid on;
+
+%% Step 5: Validation Metrics
+% Normalize inputs for fair comparison
+sine_n = sine_wave / max(abs(sine_wave));
+voice_n = voice / max(abs(voice));
+sine_rec_n = sine_recovered / max(abs(sine_recovered));
+voice_rec_n = voice_recovered / max(abs(voice_recovered));
+
+% Pearson Correlation
+corr1 = corrcoef(sine_n, sine_rec_n);  
+corr2 = corrcoef(voice_n, voice_rec_n);
+
+% Signal-to-Noise Ratio (SNR)
+snr1 = 10*log10(sum(sine_n.^2)/sum((sine_n - sine_rec_n).^2));
+snr2 = 10*log10(sum(voice_n.^2)/sum((voice_n - voice_rec_n).^2));
+
+fprintf('\n=== Validation Results ===\n');
+fprintf('Correlation (Sine Wave): %.4f\n', corr1(1,2));
+fprintf('Correlation (Voice):     %.4f\n', corr2(1,2));
+fprintf('SNR (Sine Wave):         %.2f dB\n', snr1);
+fprintf('SNR (Voice):             %.2f dB\n', snr2);
+
+%% Step 6: Audio Playback
+% Calculate duration to pause script while audio plays
+duration = length(mixed)/Fs1;
+
+fprintf('\n=== Playing Audio ===\n');
+fprintf('1. Playing Mixed Audio (Voice + Beep)...\n');
+sound(mixed, Fs1);
+pause(duration + 1); % Wait for audio + 1 second gap
+
+fprintf('2. Playing Recovered Voice (Cleaned)...\n');
+sound(voice_recovered, Fs1);
+pause(duration + 1);
+
+fprintf('Done.\n');
